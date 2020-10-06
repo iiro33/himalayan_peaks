@@ -1,0 +1,211 @@
+---
+title: "Himalayan Climbing Expeditions" 
+date: 2020-09-29 
+output: html_notebook
+---
+
+```{r Setup, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidytuesdayR)
+library(scales)
+theme_set(theme_light())
+```
+
+## Load the weekly Data
+
+Download the weekly data and make available in the `tt` object.
+
+```{r Load}
+tt <- tt_load("2020-09-22")
+```
+
+
+```{r}
+peaks <- tt$peaks
+members <- tt$members
+expeditions <- tt$expeditions
+```
+
+## What do we want to know?
+- Trend of peaks first ascended
+- Most climbed peaks
+- Tries to summit by season and success rate
+- Country stats; where are climbers from?
+- Causes of deaths and injuries
+- Reasons for terminations
+- Average days to highpoint by peak
+
+
+### Trend of peaks first ascended
+```{r, fig.width=12}
+n_unclimbed <- sum(is.na(peaks$first_ascent_year))
+
+peaks %>% 
+  filter(!is.na(first_ascent_year)) %>% 
+  inner_join(expeditions, by = c("first_ascent_expedition_id" = "expedition_id")) %>% 
+  ggplot(aes(x = first_ascent_year, y = height_metres)) +
+  geom_point(aes(color = oxygen_used), size = 2) +
+  geom_smooth(se = FALSE) +
+  scale_x_continuous(breaks = seq(1900, 2020, 10),
+                     labels = seq(1900, 2020, 10),
+                     limits = c(1900, 2020)) +
+  labs(title = "How high peaks are being first climbed",
+       x = "First ascent year",
+       y = "Peak height",
+       colour = "Oxygen used by anyone in expedition") +
+  guides(color = guide_legend(reverse = TRUE)) +
+  annotate("text", x = 1920, y = 8000, label = paste0("Unclimbed peaks: ", as.character(n_unclimbed)))
+```
+
+### Most tried peaks
+
+```{r, fig.width=12, message=FALSE}
+expeditions %>% 
+  filter(!is.na(peak_name) & season != "Unknown") %>% 
+  add_count(peak_name) %>% 
+  mutate(peak_name = fct_lump(peak_name, n = 8, w = n)) %>% 
+  group_by(year, season, peak_name) %>% 
+  summarize(n = n()) %>% 
+  ggplot(aes(x = year, y = n, group = season, fill = season)) +
+  geom_col() +
+  facet_wrap(peak_name ~ ., ncol = 3) +
+  labs(title = "Top 8 most tried peaks by season",
+       fill = "Season",
+       x = "Year",
+       y = "n Expeditions") +
+  theme(panel.spacing.x = unit(8, "mm"))
+```
+
+```{r, message=FALSE, fig.width=10}
+expeditions %>% 
+  filter(!is.na(peak_name) & season != "Unknown") %>% 
+  mutate(success = grepl("success", termination_reason, ignore.case = TRUE)) %>% 
+  add_count(peak_name) %>% 
+  mutate(peak_name = fct_lump(peak_name, n = 9, w = n)) %>%
+  mutate(peak_name = fct_reorder(peak_name, n)) %>%
+  group_by(peak_name, success) %>% 
+  summarize(n = n()) %>% 
+  ggplot(aes(x = peak_name, y = n, fill = success)) +
+  geom_col(position = "dodge") +
+  labs(title = "Top 9 most tried peaks",
+       x = "Peak name",
+       y = "Expeditions", 
+       fill = "Success") +
+  coord_flip() +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+### Tries to summit by season and success rate
+
+```{r, message=FALSE}
+expeditions %>% 
+  filter(!is.na(peak_name) & season != "Unknown") %>% 
+  mutate(success = grepl("success", termination_reason, ignore.case = TRUE),
+         season = factor(season, levels = c("Spring", "Summer", "Autumn", "Winter"))) %>% 
+  group_by(season, year) %>% 
+  summarize(success_rate = mean(success)) %>% 
+  ggplot(aes(x = season, y = success_rate, color = year)) +
+  geom_point() +
+  labs(title = "Mean success rate by season and year",
+       x = "Season",
+       y = "Mean success rate")
+```
+
+### Country stats; where are climbers from?
+
+```{r, message=FALSE}
+members %>% 
+  filter(!is.na(citizenship) & !hired) %>% 
+  add_count(citizenship) %>% 
+  mutate(citizenship = fct_lump(citizenship, 9)) %>%
+  mutate(citizenship = fct_reorder(citizenship, n)) %>% 
+  group_by(citizenship, success) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = citizenship, y = n, fill = success)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 9 countries by non-hired climbers",
+       x = "",
+       y = "n",
+       fill = "Success") +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+
+
+### Causes of deaths and injuries
+
+```{r, fig.width=8}
+d_i <- members %>%
+  filter(died | injured) %>%
+  mutate(death_injured = ifelse(died, "died", "injured"),
+         death_injured_cause = ifelse(died, death_cause, injury_type)) %>% 
+  add_count(death_injured_cause)
+
+d_i %>% 
+  filter(!is.na(death_injured_cause)) %>% 
+  mutate(death_injured_cause = fct_lump(death_injured_cause, 7)) %>% 
+  mutate(death_injured_cause = fct_reorder(death_injured_cause, n)) %>% 
+  ggplot(aes(x = death_injured_cause, y = n)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Causes of deaths and injuries",
+       x = "",
+       y = "") +
+  facet_wrap(death_injured ~ ., ncol = 2) +
+  scale_y_continuous(labels = label_number()) +
+  theme(panel.spacing.x = unit(6, "mm"),
+        plot.margin = margin(1, 1, 1, 1, "cm"))
+```
+
+
+### Reasons for terminations
+
+```{r, fig.width=10, fig.height=4}
+expeditions %>% 
+  filter(!is.na(termination_reason) & !grepl("Success", termination_reason)) %>% 
+  add_count(termination_reason) %>%  
+  mutate(termination_reason = fct_reorder(termination_reason, n)) %>% 
+  ggplot(aes(x = termination_reason, y = n)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Most common termination reasons for expeditions",
+       x = "", y = "n") +
+  scale_y_continuous(labels = label_number())
+```
+
+
+
+### Average days to highpoint by peak
+
+```{r, fig.width=10}
+give_n <- function(x) { # function to return n for stat_summary in plot
+  return(data.frame(y = mean(x), label = paste0("n: ", length(x))))
+}
+
+expeditions %>% 
+  filter(termination_reason == "Success (main peak)" & !is.na(peak_name)) %>% 
+  mutate(days_to_peak = highpoint_date - basecamp_date) %>% 
+  filter(!is.na(days_to_peak)) %>% 
+  add_count(peak_name) %>% 
+  mutate(peak_name = fct_lump(peak_name, 10)) %>% 
+  mutate(peak_name = fct_reorder(peak_name, n)) %>% 
+  ggplot(aes(x = peak_name, y = days_to_peak, fill = peak_name)) +
+  geom_boxplot(alpha = .8) +
+  labs(title = "Which peaks take longest to summit from basecamp?",
+       x = "", y = "Days to peak") +
+  scale_y_continuous(limits = c(0, 80),
+                     labels = seq(0, 80, 10),
+                     breaks = seq(0, 80, 10)) +
+  stat_summary(fun.data = give_n, geom = "text", vjust = -1, size = 3) +
+  theme(legend.position = "none")
+```
+
+
+
+
+
+
